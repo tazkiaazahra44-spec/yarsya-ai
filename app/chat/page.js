@@ -132,8 +132,8 @@ export default function ChatPage() {
     try {
       const { createWorker } = await import("tesseract.js");
       const worker = await createWorker({ logger: () => {} });
-      await worker.loadLanguage("eng");
-      await worker.initialize("eng");
+      await worker.loadLanguage("ind+eng");
+      await worker.initialize("ind+eng");
       const { data } = await worker.recognize(url);
       await worker.terminate();
       const text = data?.text?.trim?.() || "";
@@ -429,7 +429,7 @@ function exportChat(messages, session) {
 
 function MessageBubble({ role, content, isError }) {
   const isUser = role === "user";
-  const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const timestamp = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
   return (
     <div className={classNames("flex items-start gap-3 group", isUser && "flex-row-reverse")}>
       <div
