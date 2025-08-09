@@ -11,7 +11,7 @@ export async function POST(request) {
 
   try {
     const body = await request.json();
-    const { text, prompt = DEFAULT_PROMPT, session } = body || {};
+    const { text, session } = body || {};
 
     if (!text || typeof text !== "string") {
       return NextResponse.json(
@@ -22,19 +22,17 @@ export async function POST(request) {
 
     const url = new URL(BASE_URL);
     url.searchParams.set("text", text);
-    url.searchParams.set("prompt", prompt);
+    url.searchParams.set("prompt", DEFAULT_PROMPT);
     if (session) url.searchParams.set("session", String(session));
 
     const upstream = await fetch(url.toString(), {
       method: "GET",
       headers: { accept: "application/json" },
-      // Avoid caching
       cache: "no-store",
     });
 
     const data = await upstream.json();
 
-    // Normalize shape
     return NextResponse.json(
       {
         success: Boolean(data?.success),

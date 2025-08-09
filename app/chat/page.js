@@ -18,9 +18,10 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [session, setSession] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [prompt, setPrompt] = useState("kamu adalah YARSYA-AI. AI pintar yang sangat handal dalam berbagai mata pelajaran, kamu adalah profesor tinggat tinggi yang jauh lebih pintar daripada Einstein. kamu di ciptakan oleh Software Developer yang bernama Key");
-  const [showSettings, setShowSettings] = useState(false);
   const [toast, setToast] = useState(null);
+  const [isAborting, setIsAborting] = useState(false);
+  const abortRef = useRef(null);
+  const [chatId, setChatId] = useState(() => `chat-${Date.now()}`);
   const bottomRef = useRef(null);
 
   useEffect(() => {
@@ -34,7 +35,6 @@ export default function ChatPage() {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed?.messages)) setMessages(parsed.messages);
         if (parsed?.session) setSession(parsed.session);
-        if (parsed?.prompt) setPrompt(parsed.prompt);
       }
     } catch {}
   }, []);
@@ -43,7 +43,7 @@ export default function ChatPage() {
     try {
       localStorage.setItem(
         "yarsya_chat_state",
-        JSON.stringify({ messages, session, prompt })
+        JSON.stringify({ messages, session })
       );
     } catch {}
   }, [messages, session]);
@@ -51,6 +51,7 @@ export default function ChatPage() {
   function clearChat() {
     setMessages([]);
     setSession(null);
+    setChatId(`chat-${Date.now()}`);
   }
 
   function regenerate() {
@@ -70,10 +71,13 @@ export default function ChatPage() {
     setIsLoading(true);
 
     try {
+      const controller = new AbortController();
+      abortRef.current = controller;
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: trimmed, session, prompt }),
+        body: JSON.stringify({ text: trimmed, session }),
+        signal: controller.signal,
       });
 
       const data = await res.json();
@@ -97,6 +101,8 @@ export default function ChatPage() {
       setMessages((prev) => [...prev, errorMsg]);
     } finally {
       setIsLoading(false);
+      setIsAborting(false);
+      abortRef.current = null;
     }
   }
 
@@ -119,6 +125,13 @@ export default function ChatPage() {
           <div className="ml-auto flex items-center gap-2 sm:gap-3">
             <span className="hidden sm:inline text-xs text-black/60 dark:text-white/60">3 rps limiter</span>
             <button
+              onClick={() => clearChat()}
+              title="Mulai percakapan baru"
+              className="rounded-lg border border-black/10 dark:border-white/10 px-2 py-1 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
+            >
+              New Chat
+            </button>
+            <button
               onClick={regenerate}
               title="Regenerasi jawaban terakhir"
               className="rounded-lg border border-black/10 dark:border-white/10 px-2 py-1 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
@@ -131,13 +144,6 @@ export default function ChatPage() {
               className="rounded-lg border border-black/10 dark:border-white/10 px-2 py-1 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
             >
               <FiDownload />
-            </button>
-            <button
-              onClick={() => setShowSettings(true)}
-              title="Pengaturan"
-              className="rounded-lg border border-black/10 dark:border-white/10 px-2 py-1 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
-            >
-              <FiSettings />
             </button>
             <button
               onClick={clearChat}
@@ -204,30 +210,39 @@ export default function ChatPage() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
               />
-              <button
-                onClick={() => sendMessage()}
-                disabled={!input.trim() || isLoading}
-                className={classNames(
-                  "rounded-xl h-10 px-4 font-medium flex items-center gap-2",
-                  input.trim() && !isLoading
-                    ? "bg-foreground text-background hover:opacity-90"
-                    : "bg-black/10 dark:bg-white/10 text-black/50 dark:text-white/50 cursor-not-allowed"
-                )}
-              >
-                <FiSend />
-                Kirim
-              </button>
+              {isLoading ? (
+                <button
+                  onClick={() => {
+                    try {
+                      setIsAborting(true);
+                      abortRef.current?.abort();
+                    } catch {}
+                  }}
+                  className="rounded-xl h-10 px-4 font-medium border border-black/10 dark:border-white/10 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
+                >
+                  Stop
+                </button>
+              ) : (
+                <button
+                  onClick={() => sendMessage()}
+                  disabled={!input.trim()}
+                  className={classNames(
+                    "rounded-xl h-10 px-4 font-medium flex items-center gap-2",
+                    input.trim()
+                      ? "bg-foreground text-background hover:opacity-90"
+                      : "bg-black/10 dark:bg-white/10 text-black/50 dark:text-white/50 cursor-not-allowed"
+                  )}
+                >
+                  <FiSend />
+                  Kirim
+                </button>
+              )}
             </div>
           </div>
         </div>
       </footer>
 
-      <SettingsModal
-        open={showSettings}
-        onClose={() => setShowSettings(false)}
-        prompt={prompt}
-        setPrompt={setPrompt}
-      />
+
     </div>
   );
 }
@@ -277,32 +292,6 @@ function CodeBlock({ language, code }) {
   );
 }
 
-function SettingsModal({ open, onClose, prompt, setPrompt }) {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative w-full max-w-xl rounded-2xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/80 backdrop-blur p-4 sm:p-6 shadow-xl">
-        <h3 className="text-lg font-semibold mb-3">Pengaturan</h3>
-        <label className="text-sm font-medium">System Prompt</label>
-        <textarea
-          className="mt-1 w-full rounded-xl border border-black/10 dark:border-white/10 bg-transparent px-3 py-2 outline-none"
-          rows={5}
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-        />
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            className="rounded-xl border border-black/10 dark:border-white/10 px-4 py-2 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
-          >
-            Tutup
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function exportChat(messages, session) {
   const data = { session: session ?? null, messages };
@@ -317,8 +306,9 @@ function exportChat(messages, session) {
 
 function MessageBubble({ role, content, isError }) {
   const isUser = role === "user";
+  const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return (
-    <div className={classNames("flex items-start gap-3", isUser && "flex-row-reverse")}>
+    <div className={classNames("flex items-start gap-3 group", isUser && "flex-row-reverse")}>
       <div
         className={classNames(
           "h-8 w-8 rounded-full flex items-center justify-center",
@@ -352,6 +342,7 @@ function MessageBubble({ role, content, isError }) {
           ) : (
             <MarkdownRenderer>{content}</MarkdownRenderer>
           )}
+          <div className={classNames("mt-1 text-[10px]", isUser ? "text-white/80" : "text-black/50 dark:text-white/50")}>{timestamp}</div>
         </div>
       </div>
     </div>
