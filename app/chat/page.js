@@ -7,7 +7,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/cjs/styles/prism";
-import { FiSend, FiUser, FiCpu, FiTrash2, FiSettings, FiDownload, FiCopy, FiRefreshCw } from "react-icons/fi";
+import { FiSend, FiUser, FiCpu, FiTrash2, FiSettings, FiDownload, FiCopy, FiRefreshCw, FiMic, FiMicOff, FiImage, FiVolume2, FiVolumeX, FiUploadCloud } from "react-icons/fi";
 
 function classNames(...parts) {
   return parts.filter(Boolean).join(" ");
@@ -22,11 +22,23 @@ export default function ChatPage() {
   const [isAborting, setIsAborting] = useState(false);
   const abortRef = useRef(null);
   const [chatId, setChatId] = useState(() => `chat-${Date.now()}`);
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const [ttsEnabled, setTtsEnabled] = useState(true);
+  const [sttSupported, setSttSupported] = useState(false);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [ocrText, setOcrText] = useState("");
   const bottomRef = useRef(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
+
+  useEffect(() => {
+    setSpeechSupported("speechSynthesis" in window);
+    setSttSupported(!!(window.webkitSpeechRecognition || window.SpeechRecognition));
+  }, []);
 
   useEffect(() => {
     try {
@@ -113,6 +125,65 @@ export default function ChatPage() {
     }
   }
 
+  async function handleImageUpload(file) {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setImagePreview(url);
+    try {
+      const { createWorker } = await import("tesseract.js");
+      const worker = await createWorker({ logger: () => {} });
+      await worker.loadLanguage("eng");
+      await worker.initialize("eng");
+      const { data } = await worker.recognize(url);
+      await worker.terminate();
+      const text = data?.text?.trim?.() || "";
+      setOcrText(text);
+      if (text) {
+        setInput((prev) => (prev ? prev + "\n" + text : text));
+      }
+    } catch (e) {
+      setOcrText("");
+    }
+  }
+
+  function speak(text) {
+    if (!speechSupported || !ttsEnabled || !text) return;
+    try {
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = "id-ID";
+      utter.rate = 1;
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utter);
+    } catch {}
+  }
+
+  function startRecording() {
+    const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Rec) return;
+    const rec = new Rec();
+    rec.lang = "id-ID";
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+    setIsRecording(true);
+    rec.onresult = (e) => {
+      const transcript = Array.from(e.results)
+        .map((r) => r[0]?.transcript)
+        .join(" ");
+      setInput((prev) => (prev ? prev + " " + transcript : transcript));
+    };
+    rec.onerror = () => setIsRecording(false);
+    rec.onend = () => setIsRecording(false);
+    rec.start();
+    mediaRecorderRef.current = rec;
+  }
+
+  function stopRecording() {
+    try {
+      mediaRecorderRef.current?.stop?.();
+    } catch {}
+    setIsRecording(false);
+  }
+
   return (
     <div className="flex flex-col h-[100dvh] max-h-[100dvh] font-sans">
       <header className="sticky top-0 z-10 bg-background/80 backdrop-blur border-b border-black/10 dark:border-white/10">
@@ -120,7 +191,7 @@ export default function ChatPage() {
           <Image src="/next.svg" alt="logo" width={28} height={28} className="dark:invert" />
           <div className="flex flex-col">
             <h1 className="text-base font-semibold tracking-tight">YARSYA-AI Chat</h1>
-            <p className="text-xs text-black/60 dark:text-white/60">Mendukung Markdown, LaTeX/Math, dan Code Highlight</p>
+            <p className="text-xs text-black/60 dark:text-white/60">Mendukung Markdown, LaTeX/Math, Code Highlight, OCR, dan Voice</p>
           </div>
           <div className="ml-auto flex items-center gap-2 sm:gap-3">
             <span className="hidden sm:inline text-xs text-black/60 dark:text-white/60">3 rps limiter</span>
@@ -203,41 +274,93 @@ export default function ChatPage() {
           <div className="rounded-2xl border border-black/10 dark:border-white/10 p-2 bg-white dark:bg-black/30">
             <div className="flex items-end gap-2">
               <textarea
-                className="flex-1 resize-none rounded-xl px-3 py-2 bg-transparent outline-none min-h-[44px] max-h-[180px] placeholder:text-black/50 dark:placeholder:text-white/50"
+                className="flex-1 resize-none rounded-xl px-3 py-2 bg-transparent outline-none min-h-[44px] max-h-[220px] placeholder:text-black/50 dark:placeholder:text-white/50"
                 rows={1}
                 placeholder="Tulis pesan... (Enter untuk kirim, Shift+Enter baris baru)"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
               />
-              {isLoading ? (
-                <button
-                  onClick={() => {
-                    try {
-                      setIsAborting(true);
-                      abortRef.current?.abort();
-                    } catch {}
-                  }}
-                  className="rounded-xl h-10 px-4 font-medium border border-black/10 dark:border-white/10 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
-                >
-                  Stop
-                </button>
-              ) : (
-                <button
-                  onClick={() => sendMessage()}
-                  disabled={!input.trim()}
-                  className={classNames(
-                    "rounded-xl h-10 px-4 font-medium flex items-center gap-2",
-                    input.trim()
-                      ? "bg-foreground text-background hover:opacity-90"
-                      : "bg-black/10 dark:bg-white/10 text-black/50 dark:text-white/50 cursor-not-allowed"
-                  )}
-                >
-                  <FiSend />
-                  Kirim
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                <label className="inline-flex items-center gap-2 cursor-pointer" title="Unggah gambar (OCR)">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => handleImageUpload(e.target.files?.[0])}
+                  />
+                  <span className="rounded-xl h-10 px-3 border border-black/10 dark:border-white/10 flex items-center gap-2 hover:bg-black/[.03] dark:hover:bg-white/[.06]">
+                    <FiUploadCloud />
+                  </span>
+                </label>
+                {sttSupported && (
+                  isRecording ? (
+                    <button
+                      onClick={stopRecording}
+                      title="Stop Rekam"
+                      className="rounded-xl h-10 px-3 border border-black/10 dark:border-white/10 flex items-center gap-2 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
+                    >
+                      <FiMicOff />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={startRecording}
+                      title="Mulai Rekam (gratis, browser)"
+                      className="rounded-xl h-10 px-3 border border-black/10 dark:border-white/10 flex items-center gap-2 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
+                    >
+                      <FiMic />
+                    </button>
+                  )
+                )}
+                {ttsEnabled && speechSupported && (
+                  <button
+                    onClick={() => speak(messages.filter((m) => m.role === "assistant").slice(-1)[0]?.content || "")}
+                    title="Bacakan jawaban AI"
+                    className="rounded-xl h-10 px-3 border border-black/10 dark:border-white/10 flex items-center gap-2 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
+                  >
+                    <FiVolume2 />
+                  </button>
+                )}
+                {isLoading ? (
+                  <button
+                    onClick={() => {
+                      try {
+                        setIsAborting(true);
+                        abortRef.current?.abort();
+                      } catch {}
+                    }}
+                    className="rounded-xl h-10 px-4 font-medium border border-black/10 dark:border-white/10 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
+                  >
+                    Stop
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => sendMessage()}
+                    disabled={!input.trim()}
+                    className={classNames(
+                      "rounded-xl h-10 px-4 font-medium flex items-center gap-2",
+                      input.trim()
+                        ? "bg-foreground text-background hover:opacity-90"
+                        : "bg-black/10 dark:bg-white/10 text-black/50 dark:text-white/50 cursor-not-allowed"
+                    )}
+                  >
+                    <FiSend />
+                    Kirim
+                  </button>
+                )}
+              </div>
             </div>
+            {imagePreview && (
+              <div className="px-2 pt-2">
+                <div className="text-xs text-black/60 dark:text-white/60 mb-1">Pratinjau OCR</div>
+                <div className="rounded-xl border border-black/10 dark:border-white/10 overflow-hidden">
+                  <img src={imagePreview} alt="preview" className="max-h-56 object-contain w-full bg-black/5 dark:bg-white/5" />
+                  {ocrText && (
+                    <div className="p-2 text-xs text-black/80 dark:text-white/80 whitespace-pre-wrap">{ocrText}</div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </footer>
