@@ -7,7 +7,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/cjs/styles/prism";
-import { FiSend, FiUser, FiCpu, FiTrash2 } from "react-icons/fi";
+import { FiSend, FiUser, FiCpu, FiTrash2, FiSettings, FiDownload, FiCopy, FiRefreshCw } from "react-icons/fi";
 
 function classNames(...parts) {
   return parts.filter(Boolean).join(" ");
@@ -18,6 +18,9 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [session, setSession] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [prompt, setPrompt] = useState("kamu adalah YARSYA-AI. AI pintar yang sangat handal dalam berbagai mata pelajaran, kamu adalah profesor tinggat tinggi yang jauh lebih pintar daripada Einstein. kamu di ciptakan oleh Software Developer yang bernama Key");
+  const [showSettings, setShowSettings] = useState(false);
+  const [toast, setToast] = useState(null);
   const bottomRef = useRef(null);
 
   useEffect(() => {
@@ -31,6 +34,7 @@ export default function ChatPage() {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed?.messages)) setMessages(parsed.messages);
         if (parsed?.session) setSession(parsed.session);
+        if (parsed?.prompt) setPrompt(parsed.prompt);
       }
     } catch {}
   }, []);
@@ -39,7 +43,7 @@ export default function ChatPage() {
     try {
       localStorage.setItem(
         "yarsya_chat_state",
-        JSON.stringify({ messages, session })
+        JSON.stringify({ messages, session, prompt })
       );
     } catch {}
   }, [messages, session]);
@@ -47,6 +51,13 @@ export default function ChatPage() {
   function clearChat() {
     setMessages([]);
     setSession(null);
+  }
+
+  function regenerate() {
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    if (lastUser) {
+      sendMessage(lastUser.content);
+    }
   }
 
   async function sendMessage(text) {
@@ -62,7 +73,7 @@ export default function ChatPage() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: trimmed, session }),
+        body: JSON.stringify({ text: trimmed, session, prompt }),
       });
 
       const data = await res.json();
@@ -105,8 +116,29 @@ export default function ChatPage() {
             <h1 className="text-base font-semibold tracking-tight">YARSYA-AI Chat</h1>
             <p className="text-xs text-black/60 dark:text-white/60">Mendukung Markdown, LaTeX/Math, dan Code Highlight</p>
           </div>
-          <div className="ml-auto flex items-center gap-3">
-            <span className="text-xs text-black/60 dark:text-white/60">3 rps limiter</span>
+          <div className="ml-auto flex items-center gap-2 sm:gap-3">
+            <span className="hidden sm:inline text-xs text-black/60 dark:text-white/60">3 rps limiter</span>
+            <button
+              onClick={regenerate}
+              title="Regenerasi jawaban terakhir"
+              className="rounded-lg border border-black/10 dark:border-white/10 px-2 py-1 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
+            >
+              <FiRefreshCw />
+            </button>
+            <button
+              onClick={() => exportChat(messages, session)}
+              title="Export percakapan"
+              className="rounded-lg border border-black/10 dark:border-white/10 px-2 py-1 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
+            >
+              <FiDownload />
+            </button>
+            <button
+              onClick={() => setShowSettings(true)}
+              title="Pengaturan"
+              className="rounded-lg border border-black/10 dark:border-white/10 px-2 py-1 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
+            >
+              <FiSettings />
+            </button>
             <button
               onClick={clearChat}
               title="Bersihkan percakapan"
@@ -189,6 +221,13 @@ export default function ChatPage() {
           </div>
         </div>
       </footer>
+
+      <SettingsModal
+        open={showSettings}
+        onClose={() => setShowSettings(false)}
+        prompt={prompt}
+        setPrompt={setPrompt}
+      />
     </div>
   );
 }
@@ -202,14 +241,7 @@ function MarkdownRenderer({ children }) {
         code({ inline, className, children: codeChildren, ...props }) {
           const match = /language-(\w+)/.exec(className || "");
           return !inline ? (
-            <SyntaxHighlighter
-              style={oneDark}
-              language={match?.[1] || "text"}
-              PreTag="div"
-              {...props}
-            >
-              {String(codeChildren).replace(/\n$/, "")}
-            </SyntaxHighlighter>
+            <CodeBlock language={match?.[1] || "text"} code={String(codeChildren)} />
           ) : (
             <code className={className} {...props}>
               {codeChildren}
@@ -221,6 +253,66 @@ function MarkdownRenderer({ children }) {
       {children}
     </ReactMarkdown>
   );
+}
+
+function CodeBlock({ language, code }) {
+  async function onCopy() {
+    try {
+      await navigator.clipboard.writeText(code);
+    } catch {}
+  }
+  return (
+    <div className="relative group">
+      <button
+        onClick={onCopy}
+        className="absolute right-2 top-2 z-10 opacity-0 group-hover:opacity-100 transition rounded-md border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/10 px-2 py-1 text-xs flex items-center gap-1"
+        title="Salin kode"
+      >
+        <FiCopy /> Copy
+      </button>
+      <SyntaxHighlighter style={oneDark} language={language} PreTag="div">
+        {code.replace(/\n$/, "")}
+      </SyntaxHighlighter>
+    </div>
+  );
+}
+
+function SettingsModal({ open, onClose, prompt, setPrompt }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative w-full max-w-xl rounded-2xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/80 backdrop-blur p-4 sm:p-6 shadow-xl">
+        <h3 className="text-lg font-semibold mb-3">Pengaturan</h3>
+        <label className="text-sm font-medium">System Prompt</label>
+        <textarea
+          className="mt-1 w-full rounded-xl border border-black/10 dark:border-white/10 bg-transparent px-3 py-2 outline-none"
+          rows={5}
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+        />
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-black/10 dark:border-white/10 px-4 py-2 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
+          >
+            Tutup
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function exportChat(messages, session) {
+  const data = { session: session ?? null, messages };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `yarsya-chat-${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function MessageBubble({ role, content, isError }) {
@@ -235,21 +327,32 @@ function MessageBubble({ role, content, isError }) {
       >
         {isUser ? <FiUser /> : <FiCpu />}
       </div>
-      <div
-        className={classNames(
-          "max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-4 py-3 leading-relaxed",
-          isUser
-            ? "bg-blue-600 text-white"
-            : isError
-            ? "bg-red-500/10 border border-red-500/30 text-red-700 dark:text-red-300"
-            : "border border-black/10 dark:border-white/10 bg-white dark:bg-black/30"
+      <div className="relative">
+        {!isUser && (
+          <button
+            onClick={() => navigator.clipboard.writeText(String(content))}
+            className="absolute -top-2 -right-2 z-10 rounded-md border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/10 px-2 py-1 text-xs opacity-0 group-hover:opacity-100"
+            title="Salin balasan"
+          >
+            <FiCopy />
+          </button>
         )}
-      >
-        {isUser ? (
-          <div>{content}</div>
-        ) : (
-          <MarkdownRenderer>{content}</MarkdownRenderer>
-        )}
+        <div
+          className={classNames(
+            "max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-4 py-3 leading-relaxed",
+            isUser
+              ? "bg-blue-600 text-white"
+              : isError
+              ? "bg-red-500/10 border border-red-500/30 text-red-700 dark:text-red-300"
+              : "border border-black/10 dark:border-white/10 bg-white dark:bg-black/30"
+          )}
+        >
+          {isUser ? (
+            <div>{content}</div>
+          ) : (
+            <MarkdownRenderer>{content}</MarkdownRenderer>
+          )}
+        </div>
       </div>
     </div>
   );
