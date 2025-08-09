@@ -2,13 +2,30 @@
 
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { ensurePushSubscription } from "./registerPush";
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark } from "react-syntax-highlighter/dist/cjs/styles/prism";
-import { FiSend, FiUser, FiCpu, FiDownload, FiCopy, FiRefreshCw, FiMic, FiMicOff, FiVolume2, FiUploadCloud } from "react-icons/fi";
+import { oneDark, oneLight } from "react-syntax-highlighter/dist/cjs/styles/prism";
+import { 
+  FiSend, 
+  FiUser, 
+  FiCpu, 
+  FiDownload, 
+  FiCopy, 
+  FiRefreshCw, 
+  FiMic, 
+  FiMicOff, 
+  FiVolume2, 
+  FiUploadCloud,
+  FiHome,
+  FiTrash2,
+  FiCheck,
+  FiAlertCircle,
+  FiArrowRight
+} from "react-icons/fi";
 
 function classNames(...parts) {
   return parts.filter(Boolean).join(" ");
@@ -28,7 +45,9 @@ export default function ChatPage() {
   const [sttSupported, setSttSupported] = useState(false);
   const [imagePreview, setImagePreview] = useState(null);
   const [ocrText, setOcrText] = useState("");
+  const [showToast, setShowToast] = useState(null);
   const bottomRef = useRef(null);
+  const textareaRef = useRef(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -47,7 +66,9 @@ export default function ChatPage() {
         if (Array.isArray(parsed?.messages)) setMessages(parsed.messages);
         if (parsed?.session) setSession(parsed.session);
       }
-    } catch {}
+    } catch (error) {
+      console.error("Failed to load chat state:", error);
+    }
   }, []);
 
   useEffect(() => {
@@ -56,34 +77,70 @@ export default function ChatPage() {
         "yarsya_chat_state",
         JSON.stringify({ messages, session })
       );
-    } catch {}
+    } catch (error) {
+      console.error("Failed to save chat state:", error);
+    }
   }, [messages, session]);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
+    }
+  }, [input]);
+
+  function showNotification(message, type = 'success') {
+    setShowToast({ message, type });
+    setTimeout(() => setShowToast(null), 3000);
+  }
 
   function clearChat() {
     setMessages([]);
     setSession(null);
     setChatId(`chat-${Date.now()}`);
+    setImagePreview(null);
+    setOcrText("");
+    showNotification("Chat cleared successfully!");
   }
 
   function regenerate() {
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
     if (lastUser) {
+      // Remove the last AI response
+      setMessages(prev => {
+        const newMessages = [...prev];
+        const lastAiIndex = newMessages.map(m => m.role).lastIndexOf("assistant");
+        if (lastAiIndex !== -1) {
+          newMessages.splice(lastAiIndex, 1);
+        }
+        return newMessages;
+      });
       sendMessage(lastUser.content);
     }
   }
 
   async function sendMessage(text) {
     const trimmed = (text ?? input).trim();
-    if (!trimmed) return;
+    if (!trimmed && !imagePreview) return;
 
-    const userMsg = { id: crypto.randomUUID(), role: "user", content: trimmed };
+    const userMsg = { 
+      id: crypto.randomUUID(), 
+      role: "user", 
+      content: trimmed,
+      timestamp: new Date().toISOString()
+    };
+    
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
+    setImagePreview(null);
+    setOcrText("");
     setIsLoading(true);
 
     try {
       const controller = new AbortController();
       abortRef.current = controller;
+      
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -91,8 +148,15 @@ export default function ChatPage() {
         signal: controller.signal,
       });
 
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      }
+
       const data = await res.json();
-      if (!res.ok || !data?.success) throw new Error(data?.error || "Request failed");
+      
+      if (!data?.success) {
+        throw new Error(data?.error || "Request failed");
+      }
 
       setSession(data.session || session);
 
@@ -100,9 +164,12 @@ export default function ChatPage() {
         id: crypto.randomUUID(),
         role: "assistant",
         content: String(data.result ?? ""),
+        timestamp: new Date().toISOString()
       };
+      
       setMessages((prev) => [...prev, aiMsg]);
 
+      // Try to send push notification (optional)
       try {
         await ensurePushSubscription();
         await fetch("/api/push/send", {
@@ -114,15 +181,21 @@ export default function ChatPage() {
             url: "/chat",
           }),
         });
-      } catch {}
+      } catch (pushError) {
+        console.warn("Push notification failed:", pushError);
+      }
+      
     } catch (err) {
+      console.error("Chat error:", err);
       const errorMsg = {
         id: crypto.randomUUID(),
         role: "assistant",
-        content: `Terjadi kesalahan: ${err.message}`,
+        content: `Sorry, I encountered an error: ${err.message}. Please try again.`,
         isError: true,
+        timestamp: new Date().toISOString()
       };
       setMessages((prev) => [...prev, errorMsg]);
+      showNotification("Failed to send message. Please try again.", "error");
     } finally {
       setIsLoading(false);
       abortRef.current = null;
@@ -138,8 +211,16 @@ export default function ChatPage() {
 
   async function handleImageUpload(file) {
     if (!file) return;
+    
+    if (file.size > 10 * 1024 * 1024) { // 10MB limit
+      showNotification("Image too large. Please choose a smaller file.", "error");
+      return;
+    }
+    
     const url = URL.createObjectURL(file);
     setImagePreview(url);
+    showNotification("Processing image with OCR...", "info");
+    
     try {
       const { createWorker } = await import("tesseract.js");
       const worker = await createWorker({ logger: () => {} });
@@ -151,9 +232,14 @@ export default function ChatPage() {
       setOcrText(text);
       if (text) {
         setInput((prev) => (prev ? prev + "\n" + text : text));
+        showNotification("Text extracted successfully!", "success");
+      } else {
+        showNotification("No text found in image", "warning");
       }
     } catch (e) {
+      console.error("OCR error:", e);
       setOcrText("");
+      showNotification("Failed to extract text from image", "error");
     }
   }
 
@@ -165,7 +251,11 @@ export default function ChatPage() {
       utter.rate = 1;
       window.speechSynthesis.cancel();
       window.speechSynthesis.speak(utter);
-    } catch {}
+      showNotification("Reading message aloud...", "info");
+    } catch (error) {
+      console.error("TTS error:", error);
+      showNotification("Failed to read message", "error");
+    }
   }
 
   function startRecording() {
@@ -176,13 +266,22 @@ export default function ChatPage() {
     rec.interimResults = false;
     rec.maxAlternatives = 1;
     setIsRecording(true);
+    showNotification("Listening...", "info");
+    
     rec.onresult = (e) => {
       const transcript = Array.from(e.results)
         .map((r) => r[0]?.transcript)
         .join(" ");
       setInput((prev) => (prev ? prev + " " + transcript : transcript));
+      showNotification("Speech recognized!", "success");
     };
-    rec.onerror = () => setIsRecording(false);
+    
+    rec.onerror = (e) => {
+      console.error("Speech recognition error:", e);
+      setIsRecording(false);
+      showNotification("Speech recognition failed", "error");
+    };
+    
     rec.onend = () => setIsRecording(false);
     rec.start();
     recognitionRef.current = rec;
@@ -191,184 +290,243 @@ export default function ChatPage() {
   function stopRecording() {
     try {
       recognitionRef.current?.stop?.();
-    } catch {}
+    } catch (error) {
+      console.error("Stop recording error:", error);
+    }
     setIsRecording(false);
   }
 
   return (
-    <div className="flex flex-col h-[100dvh] max-h-[100dvh] font-sans">
-      <header className="sticky top-0 z-10 bg-background/80 backdrop-blur border-b border-black/10 dark:border-white/10">
-        <div className="mx-auto max-w-3xl px-4 py-3 flex items-center gap-3">
-          <Image src="/next.svg" alt="logo" width={28} height={28} className="dark:invert" />
-          <div className="flex flex-col">
-            <h1 className="text-base font-semibold tracking-tight">YARSYA-AI Chat</h1>
-            <p className="text-xs text-black/60 dark:text-white/60">Mendukung Markdown, LaTeX/Math, Code Highlight, OCR, dan Voice</p>
+    <div className="flex flex-col h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-900 dark:to-purple-900">
+      {/* Toast Notification */}
+      {showToast && (
+        <div className={classNames(
+          "fixed top-4 right-4 z-50 px-6 py-4 rounded-xl shadow-floating animate-fade-in",
+          showToast.type === 'success' && "bg-green-100 text-green-800 border border-green-200",
+          showToast.type === 'error' && "bg-red-100 text-red-800 border border-red-200",
+          showToast.type === 'warning' && "bg-yellow-100 text-yellow-800 border border-yellow-200",
+          showToast.type === 'info' && "bg-blue-100 text-blue-800 border border-blue-200"
+        )}>
+          <div className="flex items-center space-x-2">
+            {showToast.type === 'success' && <FiCheck className="w-5 h-5" />}
+            {showToast.type === 'error' && <FiAlertCircle className="w-5 h-5" />}
+            {showToast.type === 'warning' && <FiAlertCircle className="w-5 h-5" />}
+            {showToast.type === 'info' && <FiAlertCircle className="w-5 h-5" />}
+            <span className="font-medium">{showToast.message}</span>
           </div>
-          <div className="ml-auto flex items-center gap-2 sm:gap-3">
-            <span className="hidden sm:inline text-xs text-black/60 dark:text-white/60">3 rps limiter</span>
-            <button
-              onClick={() => clearChat()}
-              title="Mulai percakapan baru"
-              className="rounded-lg border border-black/10 dark:border-white/10 px-2 py-1 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
-            >
-              New Chat
-            </button>
-            <button
-              onClick={regenerate}
-              title="Regenerasi jawaban terakhir"
-              className="rounded-lg border border-black/10 dark:border-white/10 px-2 py-1 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
-            >
-              <FiRefreshCw />
-            </button>
-            <button
-              onClick={() => exportChat(messages, session)}
-              title="Export percakapan"
-              className="rounded-lg border border-black/10 dark:border-white/10 px-2 py-1 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
-            >
-              <FiDownload />
-            </button>
+        </div>
+      )}
+
+      {/* Header */}
+      <header className="glass border-b border-white/20 dark:border-gray-700/30 sticky top-0 z-40">
+        <div className="mx-auto max-w-4xl px-4 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-4">
+              <Link href="/" className="p-2 rounded-xl gradient-bg hover:scale-105 transition-transform">
+                <FiHome className="w-5 h-5 text-white" />
+              </Link>
+              
+              <div className="flex items-center space-x-3">
+                <div className="p-2 rounded-xl gradient-bg">
+                  <Image src="/next.svg" alt="YARSYA-AI" width={24} height={24} className="dark:invert" />
+                </div>
+                <div>
+                  <h1 className="text-lg font-bold gradient-text">YARSYA-AI Chat</h1>
+                  <p className="text-xs text-gray-600 dark:text-gray-400">
+                    Smart AI Assistant • LaTeX • Code • OCR
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <div className="hidden md:flex items-center space-x-2 text-xs bg-gray-100 dark:bg-gray-800 px-3 py-1 rounded-full">
+                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                <span className="text-gray-600 dark:text-gray-400">3 req/sec limit</span>
+              </div>
+              
+              <button
+                onClick={clearChat}
+                className="btn-secondary p-2 rounded-xl hover:scale-105 transition-all"
+                title="Clear chat"
+              >
+                <FiTrash2 className="w-4 h-4" />
+              </button>
+
+              <button
+                onClick={regenerate}
+                disabled={isLoading || messages.length === 0}
+                className="btn-secondary p-2 rounded-xl hover:scale-105 transition-all disabled:opacity-50"
+                title="Regenerate last response"
+              >
+                <FiRefreshCw className={classNames("w-4 h-4", isLoading && "animate-spin")} />
+              </button>
+
+              <button
+                onClick={() => exportChat(messages, session)}
+                className="btn-secondary p-2 rounded-xl hover:scale-105 transition-all"
+                title="Export chat"
+              >
+                <FiDownload className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl px-4 py-6">
-          {messages.length === 0 && (
-            <div className="rounded-2xl border border-black/10 dark:border-white/10 p-6 text-center bg-gradient-to-b from-black/[.02] to-transparent dark:from-white/[.03] shadow-sm">
-              <h2 className="text-lg font-semibold mb-2">Selamat datang di YARSYA-AI</h2>
-              <p className="text-sm text-black/70 dark:text-white/70">Tanyakan apa saja. Gunakan simbol, LaTeX, Markdown, ataupun kode.</p>
-              <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
-                {[
-                  "Jelaskan E=mc^2 dan turunkan persamaannya dalam LaTeX",
-                  "Buat tabel Markdown perbandingan algoritma sorting",
-                  "Contoh kode JavaScript: fungsi debounce() dengan TypeScript",
-                  "Tulis puisi dengan simbol ©, ™, ∞, →, ±, α, β, γ",
-                ].map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => sendMessage(s)}
-                    className="rounded-xl border border-black/10 dark:border-white/10 px-4 py-3 text-left hover:bg-black/[.03] dark:hover:bg-white/[.06] transition"
-                  >
-                    {s}
-                  </button>
+      {/* Main Chat Area */}
+      <main className="flex-1 overflow-hidden">
+        <div className="h-full flex flex-col">
+          <div className="flex-1 overflow-y-auto px-4 py-6">
+            <div className="mx-auto max-w-4xl">
+              {messages.length === 0 && (
+                <WelcomeScreen onSendMessage={sendMessage} />
+              )}
+
+              <div className="space-y-6">
+                {messages.map((message, index) => (
+                  <MessageBubble 
+                    key={message.id} 
+                    message={message}
+                    isLatest={index === messages.length - 1}
+                    onSpeak={speak}
+                    speechSupported={speechSupported && ttsEnabled}
+                  />
                 ))}
+                
+                {isLoading && <TypingIndicator />}
+                <div ref={bottomRef} />
               </div>
             </div>
-          )}
+          </div>
 
-          <div className="flex flex-col gap-4">
-            {messages.map((m) => (
-              <MessageBubble key={m.id} role={m.role} content={m.content} isError={m.isError} />
-            ))}
-            {isLoading && (
-              <div className="flex items-start gap-3">
-                <div className="h-8 w-8 rounded-full bg-black/5 dark:bg-white/10 flex items-center justify-center"><FiCpu /></div>
-                <div className="flex-1">
-                  <div className="h-5 w-28 animate-pulse rounded bg-black/10 dark:bg-white/10" />
+          {/* Input Area */}
+          <div className="border-t border-gray-200 dark:border-gray-700 bg-white/80 dark:bg-gray-900/80 backdrop-blur">
+            <div className="mx-auto max-w-4xl px-4 py-4">
+              <div className="relative">
+                {/* Image Preview */}
+                {imagePreview && (
+                  <div className="mb-4 p-4 glass rounded-2xl">
+                    <div className="flex items-start justify-between mb-3">
+                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Image Preview</span>
+                      <button 
+                        onClick={() => {
+                          setImagePreview(null);
+                          setOcrText("");
+                        }}
+                        className="text-gray-500 hover:text-red-500 transition-colors"
+                      >
+                        <FiTrash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="rounded-xl overflow-hidden border border-gray-200 dark:border-gray-700">
+                      <img src={imagePreview} alt="Preview" className="max-h-40 w-full object-contain bg-gray-50 dark:bg-gray-800" />
+                      {ocrText && (
+                        <div className="p-3 bg-gray-50 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
+                          <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Extracted text:</p>
+                          <p className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap">{ocrText}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Input Container */}
+                <div className="glass rounded-2xl p-4 shadow-elegant">
+                  <div className="flex items-end space-x-3">
+                    <div className="flex-1">
+                      <textarea
+                        ref={textareaRef}
+                        className="w-full resize-none bg-transparent outline-none placeholder-gray-500 dark:placeholder-gray-400 text-gray-900 dark:text-white min-h-[2.5rem] max-h-32"
+                        rows={1}
+                        placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyDown={handleKeyDown}
+                        disabled={isLoading}
+                      />
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="flex items-center space-x-2">
+                      {/* Image Upload */}
+                      <label className="btn-secondary p-2 rounded-xl cursor-pointer hover:scale-105 transition-all" title="Upload image (OCR)">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => handleImageUpload(e.target.files?.[0])}
+                        />
+                        <FiUploadCloud className="w-5 h-5" />
+                      </label>
+
+                      {/* Voice Recording */}
+                      {sttSupported && (
+                        <button
+                          onClick={isRecording ? stopRecording : startRecording}
+                          className={classNames(
+                            "p-2 rounded-xl transition-all hover:scale-105",
+                            isRecording 
+                              ? "bg-red-100 text-red-600 border border-red-200 animate-pulse" 
+                              : "btn-secondary"
+                          )}
+                          title={isRecording ? "Stop recording" : "Start voice recording"}
+                        >
+                          {isRecording ? <FiMicOff className="w-5 h-5" /> : <FiMic className="w-5 h-5" />}
+                        </button>
+                      )}
+
+                      {/* Text-to-Speech */}
+                      {speechSupported && ttsEnabled && messages.length > 0 && (
+                        <button
+                          onClick={() => {
+                            const lastAiMessage = [...messages].reverse().find(m => m.role === "assistant");
+                            if (lastAiMessage) speak(lastAiMessage.content);
+                          }}
+                          className="btn-secondary p-2 rounded-xl hover:scale-105 transition-all"
+                          title="Read last AI response"
+                        >
+                          <FiVolume2 className="w-5 h-5" />
+                        </button>
+                      )}
+
+                      {/* Send/Stop Button */}
+                      {isLoading ? (
+                        <button
+                          onClick={() => {
+                            try {
+                              abortRef.current?.abort();
+                            } catch (error) {
+                              console.error("Abort error:", error);
+                            }
+                          }}
+                          className="bg-red-100 text-red-600 border border-red-200 px-4 py-2 rounded-xl font-medium hover:bg-red-200 transition-colors"
+                        >
+                          Stop
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => sendMessage()}
+                          disabled={!input.trim() && !imagePreview}
+                          className={classNames(
+                            "px-6 py-2 rounded-xl font-medium flex items-center space-x-2 transition-all",
+                            (input.trim() || imagePreview)
+                              ? "btn-primary hover:scale-105 shadow-elegant"
+                              : "bg-gray-100 text-gray-400 cursor-not-allowed dark:bg-gray-800 dark:text-gray-600"
+                          )}
+                        >
+                          <FiSend className="w-4 h-4" />
+                          <span>Send</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
-            )}
-            <div ref={bottomRef} />
+            </div>
           </div>
         </div>
       </main>
-
-      <footer className="sticky bottom-0 bg-background/80 backdrop-blur border-t border-black/10 dark:border-white/10">
-        <div className="mx-auto max-w-3xl px-4 py-4">
-          <div className="rounded-2xl border border-black/10 dark:border-white/10 p-2 bg-white dark:bg-black/30 shadow-sm">
-            <div className="flex items-end gap-2">
-              <textarea
-                className="flex-1 resize-none rounded-xl px-3 py-2 bg-transparent outline-none min-h-[44px] max-h-[220px] placeholder:text-black/50 dark:placeholder:text-white/50"
-                rows={1}
-                placeholder="Tulis pesan... (Enter untuk kirim, Shift+Enter baris baru)"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-              />
-              <div className="flex items-center gap-2">
-                <label className="inline-flex items-center gap-2 cursor-pointer" title="Unggah gambar (OCR)">
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => handleImageUpload(e.target.files?.[0])}
-                  />
-                  <span className="rounded-xl h-10 px-3 border border-black/10 dark:border-white/10 flex items-center gap-2 hover:bg-black/[.03] dark:hover:bg-white/[.06]">
-                    <FiUploadCloud />
-                  </span>
-                </label>
-                {sttSupported && (
-                  isRecording ? (
-                    <button
-                      onClick={stopRecording}
-                      title="Stop Rekam"
-                      className="rounded-xl h-10 px-3 border border-black/10 dark:border-white/10 flex items-center gap-2 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
-                    >
-                      <FiMicOff />
-                    </button>
-                  ) : (
-                    <button
-                      onClick={startRecording}
-                      title="Mulai Rekam (gratis, browser)"
-                      className="rounded-xl h-10 px-3 border border-black/10 dark:border-white/10 flex items-center gap-2 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
-                    >
-                      <FiMic />
-                    </button>
-                  )
-                )}
-                {ttsEnabled && speechSupported && (
-                  <button
-                    onClick={() => speak(messages.filter((m) => m.role === "assistant").slice(-1)[0]?.content || "")}
-                    title="Bacakan jawaban AI"
-                    className="rounded-xl h-10 px-3 border border-black/10 dark:border-white/10 flex items-center gap-2 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
-                  >
-                    <FiVolume2 />
-                  </button>
-                )}
-                {isLoading ? (
-                  <button
-                    onClick={() => {
-                      try {
-                        abortRef.current?.abort();
-                      } catch {}
-                    }}
-                    className="rounded-xl h-10 px-4 font-medium border border-black/10 dark:border-white/10 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
-                  >
-                    Stop
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => sendMessage()}
-                    disabled={!input.trim()}
-                    className={classNames(
-                      "rounded-xl h-10 px-4 font-medium flex items-center gap-2",
-                      input.trim()
-                        ? "bg-foreground text-background hover:opacity-90"
-                        : "bg-black/10 dark:bg-white/10 text-black/50 dark:text-white/50 cursor-not-allowed"
-                    )}
-                  >
-                    <FiSend />
-                    Kirim
-                  </button>
-                )}
-              </div>
-            </div>
-            {imagePreview && (
-              <div className="px-2 pt-2">
-                <div className="text-xs text-black/60 dark:text-white/60 mb-1">Pratinjau OCR</div>
-                <div className="rounded-xl border border-black/10 dark:border-white/10 overflow-hidden">
-                  <img src={imagePreview} alt="preview" className="max-h-56 object-contain w-full bg-black/5 dark:bg-white/5" />
-                  {ocrText && (
-                    <div className="p-2 text-xs text-black/80 dark:text-white/80 whitespace-pre-wrap">{ocrText}</div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </footer>
-
-
     </div>
   );
 }
@@ -397,30 +555,67 @@ function MarkdownRenderer({ children }) {
 }
 
 function CodeBlock({ language, code }) {
+  const [copied, setCopied] = useState(false);
+  
   async function onCopy() {
     try {
       await navigator.clipboard.writeText(code);
-    } catch {}
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      console.error("Failed to copy:", error);
+    }
   }
+  
   return (
-    <div className="relative group">
+    <div className="relative group code-block">
       <button
         onClick={onCopy}
-        className="absolute right-2 top-2 z-10 opacity-0 group-hover:opacity-100 transition rounded-md border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/10 px-2 py-1 text-xs flex items-center gap-1"
-        title="Salin kode"
+        className={classNames(
+          "absolute right-3 top-3 z-10 px-3 py-1 rounded-lg text-xs font-medium transition-all",
+          "opacity-0 group-hover:opacity-100",
+          copied 
+            ? "bg-green-100 text-green-700 border border-green-200" 
+            : "bg-gray-100 text-gray-700 border border-gray-200 hover:bg-gray-200"
+        )}
+        title={copied ? "Copied!" : "Copy code"}
       >
-        <FiCopy /> Copy
+        {copied ? (
+          <>
+            <FiCheck className="w-3 h-3 inline mr-1" />
+            Copied!
+          </>
+        ) : (
+          <>
+            <FiCopy className="w-3 h-3 inline mr-1" />
+            Copy
+          </>
+        )}
       </button>
-      <SyntaxHighlighter style={oneDark} language={language} PreTag="div">
+      <SyntaxHighlighter 
+        style={oneDark} 
+        language={language} 
+        PreTag="div"
+        customStyle={{
+          margin: 0,
+          borderRadius: '12px',
+          fontSize: '14px',
+          lineHeight: '1.5'
+        }}
+      >
         {code.replace(/\n$/, "")}
       </SyntaxHighlighter>
     </div>
   );
 }
 
-
 function exportChat(messages, session) {
-  const data = { session: session ?? null, messages };
+  const data = { 
+    session: session ?? null, 
+    messages,
+    exportedAt: new Date().toISOString(),
+    appVersion: "YARSYA-AI v2.0"
+  };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -430,45 +625,291 @@ function exportChat(messages, session) {
   URL.revokeObjectURL(url);
 }
 
-function MessageBubble({ role, content, isError }) {
-  const isUser = role === "user";
-  const timestamp = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+function TypingIndicator() {
   return (
-    <div className={classNames("flex items-start gap-3 group", isUser && "flex-row-reverse")}>
-      <div
-        className={classNames(
-          "h-8 w-8 rounded-full flex items-center justify-center",
-          isUser ? "bg-blue-600 text-white" : "bg-black/5 dark:bg-white/10"
-        )}
-      >
-        {isUser ? <FiUser /> : <FiCpu />}
+    <div className="flex items-start space-x-3 animate-fade-in">
+      <div className="p-2 rounded-full bg-gradient-to-r from-blue-500 to-purple-500">
+        <FiCpu className="w-4 h-4 text-white" />
       </div>
-      <div className="relative">
-        {!isUser && (
-          <button
-            onClick={() => navigator.clipboard.writeText(String(content))}
-            className="absolute right-1 top-1 z-10 rounded-md border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/10 px-2 py-1 text-xs opacity-0 group-hover:opacity-100"
-            title="Salin balasan"
-          >
-            <FiCopy />
-          </button>
+      <div className="flex-1">
+        <div className="glass rounded-2xl rounded-tl-md p-4">
+          <div className="flex items-center space-x-2">
+            <span className="text-sm text-gray-600 dark:text-gray-400">YARSYA-AI is thinking</span>
+            <div className="loading-dots">
+              <div></div>
+              <div></div>
+              <div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WelcomeScreen({ onSendMessage }) {
+  const suggestions = [
+    {
+      icon: "🧮",
+      title: "Mathematics & Physics",
+      text: "Jelaskan E=mc² dan turunkan persamaannya dalam LaTeX",
+      category: "math"
+    },
+    {
+      icon: "📊",
+      title: "Data & Tables",  
+      text: "Buat tabel Markdown perbandingan algoritma sorting",
+      category: "data"
+    },
+    {
+      icon: "💻",
+      title: "Programming",
+      text: "Contoh kode JavaScript: fungsi debounce() dengan TypeScript",
+      category: "code"
+    },
+    {
+      icon: "🎨",
+      title: "Creative Writing",
+      text: "Tulis puisi dengan simbol ©, ™, ∞, →, ±, α, β, γ",
+      category: "creative"
+    },
+    {
+      icon: "🔬",
+      title: "Science Explanation",
+      text: "Bagaimana cara kerja fotosintesis secara detail?",
+      category: "science"
+    },
+    {
+      icon: "🌍",
+      title: "General Knowledge",
+      text: "Sejarah singkat perkembangan internet",
+      category: "general"
+    }
+  ];
+
+  return (
+    <div className="space-y-8 animate-fade-in">
+      {/* Welcome Header */}
+      <div className="text-center">
+        <div className="inline-flex p-4 rounded-2xl gradient-bg mb-6">
+          <FiCpu className="w-8 h-8 text-white" />
+        </div>
+        <h2 className="text-3xl font-bold gradient-text mb-4">
+          Welcome to YARSYA-AI
+        </h2>
+        <p className="text-lg text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
+          Your intelligent assistant for learning, problem-solving, and creative thinking. 
+          Ask anything from math and science to programming and literature.
+        </p>
+      </div>
+
+      {/* Capabilities */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="glass rounded-2xl p-6 text-center">
+          <div className="text-2xl mb-3">📐</div>
+          <h3 className="font-semibold text-gray-900 dark:text-white mb-2">LaTeX & Math</h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Complex equations, formulas, and mathematical notation
+          </p>
+        </div>
+        
+        <div className="glass rounded-2xl p-6 text-center">
+          <div className="text-2xl mb-3">🖥️</div>
+          <h3 className="font-semibold text-gray-900 dark:text-white mb-2">Code Highlighting</h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Syntax highlighting for all major programming languages
+          </p>
+        </div>
+        
+        <div className="glass rounded-2xl p-6 text-center">
+          <div className="text-2xl mb-3">📝</div>
+          <h3 className="font-semibold text-gray-900 dark:text-white mb-2">Rich Formatting</h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Markdown support for beautiful, structured content
+          </p>
+        </div>
+      </div>
+
+      {/* Suggestion Cards */}
+      <div>
+        <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-6 text-center">
+          Try asking about...
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {suggestions.map((suggestion, index) => (
+            <button
+              key={index}
+              onClick={() => onSendMessage(suggestion.text)}
+              className="group glass rounded-2xl p-6 text-left hover:shadow-floating transition-all hover:scale-105"
+            >
+              <div className="flex items-start space-x-4">
+                <div className="text-2xl flex-shrink-0">
+                  {suggestion.icon}
+                </div>
+                <div className="flex-1">
+                  <h4 className="font-medium text-gray-900 dark:text-white mb-2 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                    {suggestion.title}
+                  </h4>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-2">
+                    {suggestion.text}
+                  </p>
+                </div>
+                <FiArrowRight className="w-4 h-4 text-gray-400 group-hover:text-blue-500 group-hover:translate-x-1 transition-all flex-shrink-0 mt-1" />
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Quick Start Tips */}
+      <div className="glass rounded-2xl p-6">
+        <h3 className="font-semibold text-gray-900 dark:text-white mb-4">💡 Quick Tips</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+          <div className="flex items-start space-x-3">
+            <div className="w-2 h-2 bg-blue-500 rounded-full mt-2 flex-shrink-0"></div>
+            <div>
+              <span className="font-medium text-gray-900 dark:text-white">Press Enter</span>
+              <span className="text-gray-600 dark:text-gray-400"> to send your message</span>
+            </div>
+          </div>
+          <div className="flex items-start space-x-3">
+            <div className="w-2 h-2 bg-green-500 rounded-full mt-2 flex-shrink-0"></div>
+            <div>
+              <span className="font-medium text-gray-900 dark:text-white">Shift + Enter</span>
+              <span className="text-gray-600 dark:text-gray-400"> for a new line</span>
+            </div>
+          </div>
+          <div className="flex items-start space-x-3">
+            <div className="w-2 h-2 bg-purple-500 rounded-full mt-2 flex-shrink-0"></div>
+            <div>
+              <span className="font-medium text-gray-900 dark:text-white">Upload images</span>
+              <span className="text-gray-600 dark:text-gray-400"> for OCR text extraction</span>
+            </div>
+          </div>
+          <div className="flex items-start space-x-3">
+            <div className="w-2 h-2 bg-orange-500 rounded-full mt-2 flex-shrink-0"></div>
+            <div>
+              <span className="font-medium text-gray-900 dark:text-white">Voice input</span>
+              <span className="text-gray-600 dark:text-gray-400"> supported in modern browsers</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MessageBubble({ message, isLatest, onSpeak, speechSupported }) {
+  const isUser = message.role === "user";
+  const isAssistant = message.role === "assistant";
+  const isError = message.isError;
+  const [copied, setCopied] = useState(false);
+  
+  const timestamp = message.timestamp 
+    ? new Date(message.timestamp).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })
+    : new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      console.error("Failed to copy:", error);
+    }
+  };
+
+  const handleSpeak = () => {
+    if (isAssistant && speechSupported) {
+      onSpeak(message.content);
+    }
+  };
+
+  return (
+    <div className={classNames(
+      "flex items-start space-x-3 group animate-slide-in",
+      isUser && "flex-row-reverse space-x-reverse"
+    )}>
+      {/* Avatar */}
+      <div className={classNames(
+        "p-2 rounded-full flex-shrink-0",
+        isUser 
+          ? "bg-gradient-to-r from-blue-500 to-purple-500" 
+          : isError 
+            ? "bg-red-100 text-red-600 border border-red-200"
+            : "bg-gradient-to-r from-gray-500 to-gray-600"
+      )}>
+        {isUser ? (
+          <FiUser className="w-4 h-4 text-white" />
+        ) : (
+          <FiCpu className="w-4 h-4 text-white" />
         )}
-        <div
-          className={classNames(
-            "max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-4 py-3 leading-relaxed shadow-sm",
-            isUser
-              ? "bg-blue-600 text-white"
-              : isError
-              ? "bg-red-500/10 border border-red-500/30 text-red-700 dark:text-red-300"
-              : "border border-black/10 dark:border-white/10 bg-white dark:bg-black/30"
+      </div>
+
+      {/* Message Content */}
+      <div className={classNames("flex-1 max-w-[85%]", isUser && "flex flex-col items-end")}>
+        <div className={classNames(
+          "relative rounded-2xl px-4 py-3 shadow-elegant",
+          isUser 
+            ? "message-user rounded-tr-md" 
+            : isError 
+              ? "message-error rounded-tl-md"
+              : "message-ai rounded-tl-md"
+        )}>
+          {/* Action buttons for AI messages */}
+          {isAssistant && !isError && (
+            <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex space-x-1">
+              <button
+                onClick={handleCopy}
+                className={classNames(
+                  "p-1 rounded-md text-xs transition-all",
+                  copied 
+                    ? "bg-green-100 text-green-700" 
+                    : "bg-gray-100 hover:bg-gray-200 text-gray-600"
+                )}
+                title={copied ? "Copied!" : "Copy message"}
+              >
+                {copied ? <FiCheck className="w-3 h-3" /> : <FiCopy className="w-3 h-3" />}
+              </button>
+              
+              {speechSupported && (
+                <button
+                  onClick={handleSpeak}
+                  className="p-1 rounded-md text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 transition-all"
+                  title="Read aloud"
+                >
+                  <FiVolume2 className="w-3 h-3" />
+                </button>
+              )}
+            </div>
           )}
-        >
-          {isUser ? (
-            <div>{content}</div>
-          ) : (
-            <MarkdownRenderer>{content}</MarkdownRenderer>
-          )}
-          <div className={classNames("mt-1 text-[10px]", isUser ? "text-white/80" : "text-black/50 dark:text-white/50")}>{timestamp}</div>
+
+          {/* Message text */}
+          <div className="pr-12">
+            {isUser ? (
+              <div className="text-white whitespace-pre-wrap break-words">
+                {message.content}
+              </div>
+            ) : (
+              <div className={classNames(
+                "prose prose-sm max-w-none",
+                isError ? "text-red-700 dark:text-red-300" : "text-gray-900 dark:text-gray-100"
+              )}>
+                <MarkdownRenderer>{message.content}</MarkdownRenderer>
+              </div>
+            )}
+          </div>
+
+          {/* Timestamp */}
+          <div className={classNames(
+            "text-xs mt-2 opacity-70",
+            isUser ? "text-white" : isError ? "text-red-600" : "text-gray-500 dark:text-gray-400"
+          )}>
+            {timestamp}
+            {isLatest && isAssistant && !isError && (
+              <span className="ml-2 text-green-500">●</span>
+            )}
+          </div>
         </div>
       </div>
     </div>
