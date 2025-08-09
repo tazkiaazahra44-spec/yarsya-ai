@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import { ensurePushSubscription } from "./registerPush";
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -103,6 +104,20 @@ export default function ChatPage() {
         content: String(data.result ?? ""),
       };
       setMessages((prev) => [...prev, aiMsg]);
+
+      // Best-effort push notify
+      try {
+        await ensurePushSubscription();
+        await fetch("/api/push/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "YARSYA-AI",
+            body: aiMsg.content.slice(0, 120) + (aiMsg.content.length > 120 ? "…" : ""),
+            url: "/chat",
+          }),
+        });
+      } catch {}
     } catch (err) {
       const errorMsg = {
         id: crypto.randomUUID(),
