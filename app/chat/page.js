@@ -8,7 +8,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/cjs/styles/prism";
-import { FiSend, FiUser, FiCpu, FiTrash2, FiSettings, FiDownload, FiCopy, FiRefreshCw, FiMic, FiMicOff, FiImage, FiVolume2, FiVolumeX, FiUploadCloud } from "react-icons/fi";
+import { FiSend, FiUser, FiCpu, FiDownload, FiCopy, FiRefreshCw, FiMic, FiMicOff, FiVolume2, FiUploadCloud } from "react-icons/fi";
 
 function classNames(...parts) {
   return parts.filter(Boolean).join(" ");
@@ -19,12 +19,10 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [session, setSession] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [toast, setToast] = useState(null);
-  const [isAborting, setIsAborting] = useState(false);
   const abortRef = useRef(null);
   const [chatId, setChatId] = useState(() => `chat-${Date.now()}`);
   const [isRecording, setIsRecording] = useState(false);
-  const mediaRecorderRef = useRef(null);
+  const recognitionRef = useRef(null);
   const [speechSupported, setSpeechSupported] = useState(false);
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [sttSupported, setSttSupported] = useState(false);
@@ -105,7 +103,6 @@ export default function ChatPage() {
       };
       setMessages((prev) => [...prev, aiMsg]);
 
-      // Best-effort push notify
       try {
         await ensurePushSubscription();
         await fetch("/api/push/send", {
@@ -128,7 +125,6 @@ export default function ChatPage() {
       setMessages((prev) => [...prev, errorMsg]);
     } finally {
       setIsLoading(false);
-      setIsAborting(false);
       abortRef.current = null;
     }
   }
@@ -189,12 +185,12 @@ export default function ChatPage() {
     rec.onerror = () => setIsRecording(false);
     rec.onend = () => setIsRecording(false);
     rec.start();
-    mediaRecorderRef.current = rec;
+    recognitionRef.current = rec;
   }
 
   function stopRecording() {
     try {
-      mediaRecorderRef.current?.stop?.();
+      recognitionRef.current?.stop?.();
     } catch {}
     setIsRecording(false);
   }
@@ -231,13 +227,6 @@ export default function ChatPage() {
             >
               <FiDownload />
             </button>
-            <button
-              onClick={clearChat}
-              title="Bersihkan percakapan"
-              className="rounded-lg border border-black/10 dark:border-white/10 px-2 py-1 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
-            >
-              <FiTrash2 />
-            </button>
           </div>
         </div>
       </header>
@@ -245,7 +234,7 @@ export default function ChatPage() {
       <main className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl px-4 py-6">
           {messages.length === 0 && (
-            <div className="rounded-2xl border border-black/10 dark:border-white/10 p-6 text-center bg-gradient-to-b from-black/[.02] to-transparent dark:from-white/[.03]">
+            <div className="rounded-2xl border border-black/10 dark:border-white/10 p-6 text-center bg-gradient-to-b from-black/[.02] to-transparent dark:from-white/[.03] shadow-sm">
               <h2 className="text-lg font-semibold mb-2">Selamat datang di YARSYA-AI</h2>
               <p className="text-sm text-black/70 dark:text-white/70">Tanyakan apa saja. Gunakan simbol, LaTeX, Markdown, ataupun kode.</p>
               <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
@@ -286,7 +275,7 @@ export default function ChatPage() {
 
       <footer className="sticky bottom-0 bg-background/80 backdrop-blur border-t border-black/10 dark:border-white/10">
         <div className="mx-auto max-w-3xl px-4 py-4">
-          <div className="rounded-2xl border border-black/10 dark:border-white/10 p-2 bg-white dark:bg-black/30">
+          <div className="rounded-2xl border border-black/10 dark:border-white/10 p-2 bg-white dark:bg-black/30 shadow-sm">
             <div className="flex items-end gap-2">
               <textarea
                 className="flex-1 resize-none rounded-xl px-3 py-2 bg-transparent outline-none min-h-[44px] max-h-[220px] placeholder:text-black/50 dark:placeholder:text-white/50"
@@ -340,7 +329,6 @@ export default function ChatPage() {
                   <button
                     onClick={() => {
                       try {
-                        setIsAborting(true);
                         abortRef.current?.abort();
                       } catch {}
                     }}
@@ -459,7 +447,7 @@ function MessageBubble({ role, content, isError }) {
         {!isUser && (
           <button
             onClick={() => navigator.clipboard.writeText(String(content))}
-            className="absolute -top-2 -right-2 z-10 rounded-md border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/10 px-2 py-1 text-xs opacity-0 group-hover:opacity-100"
+            className="absolute right-1 top-1 z-10 rounded-md border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/10 px-2 py-1 text-xs opacity-0 group-hover:opacity-100"
             title="Salin balasan"
           >
             <FiCopy />
@@ -467,7 +455,7 @@ function MessageBubble({ role, content, isError }) {
         )}
         <div
           className={classNames(
-            "max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-4 py-3 leading-relaxed",
+            "max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-4 py-3 leading-relaxed shadow-sm",
             isUser
               ? "bg-blue-600 text-white"
               : isError
