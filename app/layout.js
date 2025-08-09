@@ -16,6 +16,11 @@ export const metadata = {
   title: "YARSYA-AI Chat",
   description:
     "Chat AI modern berbasis Next.js dengan rate limit 3 rps dan dukungan simbol/kode.",
+  icons: {
+    icon: "/favicon.svg",
+    shortcut: "/favicon.svg",
+    apple: "/icon.svg",
+  },
 };
 
 export default function RootLayout({ children }) {
