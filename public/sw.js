@@ -16,8 +16,8 @@ self.addEventListener("push", (event) => {
   const url = data.url || "/chat";
   const options = {
     body,
-    icon: "/next.svg",
-    badge: "/next.svg",
+    icon: "/icon.svg",
+    badge: "/icon.svg",
     data: { url },
   };
   event.waitUntil(self.registration.showNotification(title, options));

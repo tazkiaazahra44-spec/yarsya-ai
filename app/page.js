@@ -33,10 +33,10 @@ export default function Home() {
             <a href="#fitur" className="rounded-full border border-black/10 dark:border-white/10 px-6 py-3 font-medium hover:bg-black/[.03] dark:hover:bg-white/[.06]">Lihat Fitur</a>
           </div>
           <div className="mt-10 w-full max-w-3xl rounded-2xl border border-black/10 dark:border-white/10 p-4">
-            <video className="w-full rounded-lg" autoPlay muted loop playsInline>
-              <source src="" type="video/mp4" />
-            </video>
-            <div className="text-xs text-black/60 dark:text-white/60 mt-2">Demo placeholder — mulai chat untuk mencoba langsung.</div>
+            <div className="aspect-video w-full rounded-lg bg-black/5 dark:bg-white/10 grid place-items-center text-sm text-black/60 dark:text-white/60">
+              Demo placeholder — buka halaman chat untuk mencoba langsung.
+            </div>
+            <div className="text-xs text-black/60 dark:text-white/60 mt-2">Tidak ada video demo. Klik Mulai Chat untuk interaksi langsung.</div>
           </div>
         </section>
 
