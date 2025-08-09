@@ -1,7 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import ReactMarkdown from "react-markdown";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneDark } from "react-syntax-highlighter/dist/cjs/styles/prism";
+import { FiSend, FiUser, FiCpu, FiTrash2 } from "react-icons/fi";
 
 function classNames(...parts) {
   return parts.filter(Boolean).join(" ");
@@ -37,6 +43,11 @@ export default function ChatPage() {
       );
     } catch {}
   }, [messages, session]);
+
+  function clearChat() {
+    setMessages([]);
+    setSession(null);
+  }
 
   async function sendMessage(text) {
     const trimmed = (text ?? input).trim();
@@ -92,9 +103,18 @@ export default function ChatPage() {
           <Image src="/next.svg" alt="logo" width={28} height={28} className="dark:invert" />
           <div className="flex flex-col">
             <h1 className="text-base font-semibold tracking-tight">YARSYA-AI Chat</h1>
-            <p className="text-xs text-black/60 dark:text-white/60">Cepat, modern, dan mendukung simbol/kode</p>
+            <p className="text-xs text-black/60 dark:text-white/60">Mendukung Markdown, LaTeX/Math, dan Code Highlight</p>
           </div>
-          <div className="ml-auto text-xs text-black/60 dark:text-white/60">3 rps limiter aktif</div>
+          <div className="ml-auto flex items-center gap-3">
+            <span className="text-xs text-black/60 dark:text-white/60">3 rps limiter</span>
+            <button
+              onClick={clearChat}
+              title="Bersihkan percakapan"
+              className="rounded-lg border border-black/10 dark:border-white/10 px-2 py-1 hover:bg-black/[.03] dark:hover:bg-white/[.06]"
+            >
+              <FiTrash2 />
+            </button>
+          </div>
         </div>
       </header>
 
@@ -103,13 +123,13 @@ export default function ChatPage() {
           {messages.length === 0 && (
             <div className="rounded-2xl border border-black/10 dark:border-white/10 p-6 text-center bg-gradient-to-b from-black/[.02] to-transparent dark:from-white/[.03]">
               <h2 className="text-lg font-semibold mb-2">Selamat datang di YARSYA-AI</h2>
-              <p className="text-sm text-black/70 dark:text-white/70">Tanyakan apa saja. Gunakan simbol, tanda khusus, ataupun kode.</p>
+              <p className="text-sm text-black/70 dark:text-white/70">Tanyakan apa saja. Gunakan simbol, LaTeX, Markdown, ataupun kode.</p>
               <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
                 {[
-                  "Buatkan ringkasan topik fisika kuantum",
-                  "Tulis ekspresi matematika: ∑_{i=1}^{n} i^2",
-                  "Contoh kode JavaScript: fungsi debounce()",
-                  "Tulis puisi dengan simbol ©, ™, ∞, and →",
+                  "Jelaskan E=mc^2 dan turunkan persamaannya dalam LaTeX",
+                  "Buat tabel Markdown perbandingan algoritma sorting",
+                  "Contoh kode JavaScript: fungsi debounce() dengan TypeScript",
+                  "Tulis puisi dengan simbol ©, ™, ∞, →, ±, α, β, γ",
                 ].map((s) => (
                   <button
                     key={s}
@@ -129,7 +149,7 @@ export default function ChatPage() {
             ))}
             {isLoading && (
               <div className="flex items-start gap-3">
-                <div className="h-8 w-8 rounded-full bg-black/5 dark:bg-white/10 flex items-center justify-center">🤖</div>
+                <div className="h-8 w-8 rounded-full bg-black/5 dark:bg-white/10 flex items-center justify-center"><FiCpu /></div>
                 <div className="flex-1">
                   <div className="h-5 w-28 animate-pulse rounded bg-black/10 dark:bg-white/10" />
                 </div>
@@ -156,12 +176,13 @@ export default function ChatPage() {
                 onClick={() => sendMessage()}
                 disabled={!input.trim() || isLoading}
                 className={classNames(
-                  "rounded-xl h-10 px-4 font-medium",
+                  "rounded-xl h-10 px-4 font-medium flex items-center gap-2",
                   input.trim() && !isLoading
                     ? "bg-foreground text-background hover:opacity-90"
                     : "bg-black/10 dark:bg-white/10 text-black/50 dark:text-white/50 cursor-not-allowed"
                 )}
               >
+                <FiSend />
                 Kirim
               </button>
             </div>
@@ -172,11 +193,48 @@ export default function ChatPage() {
   );
 }
 
+function MarkdownRenderer({ children }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkMath]}
+      rehypePlugins={[rehypeKatex]}
+      components={{
+        code({ inline, className, children: codeChildren, ...props }) {
+          const match = /language-(\w+)/.exec(className || "");
+          return !inline ? (
+            <SyntaxHighlighter
+              style={oneDark}
+              language={match?.[1] || "text"}
+              PreTag="div"
+              {...props}
+            >
+              {String(codeChildren).replace(/\n$/, "")}
+            </SyntaxHighlighter>
+          ) : (
+            <code className={className} {...props}>
+              {codeChildren}
+            </code>
+          );
+        },
+      }}
+    >
+      {children}
+    </ReactMarkdown>
+  );
+}
+
 function MessageBubble({ role, content, isError }) {
   const isUser = role === "user";
   return (
-    <div className={classNames("flex items-start gap-3", isUser && "flex-row-reverse")}> 
-      <div className={classNames("h-8 w-8 rounded-full flex items-center justify-center", isUser ? "bg-blue-600 text-white" : "bg-black/5 dark:bg-white/10")}>{isUser ? "🧑" : "🤖"}</div>
+    <div className={classNames("flex items-start gap-3", isUser && "flex-row-reverse")}>
+      <div
+        className={classNames(
+          "h-8 w-8 rounded-full flex items-center justify-center",
+          isUser ? "bg-blue-600 text-white" : "bg-black/5 dark:bg-white/10"
+        )}
+      >
+        {isUser ? <FiUser /> : <FiCpu />}
+      </div>
       <div
         className={classNames(
           "max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-4 py-3 leading-relaxed",
@@ -187,7 +245,11 @@ function MessageBubble({ role, content, isError }) {
             : "border border-black/10 dark:border-white/10 bg-white dark:bg-black/30"
         )}
       >
-        {content}
+        {isUser ? (
+          <div>{content}</div>
+        ) : (
+          <MarkdownRenderer>{content}</MarkdownRenderer>
+        )}
       </div>
     </div>
   );
